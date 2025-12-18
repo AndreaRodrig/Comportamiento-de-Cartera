@@ -5,6 +5,7 @@ from statsmodels.tsa.seasonal import seasonal_decompose
 from sklearn.preprocessing import LabelEncoder
 import os
 
+
 user_dir = "..."
 
 # Cargar múltiples fuentes de datos
@@ -304,3 +305,94 @@ ges_t = ges[ges['FECHA CORTE'] <= df['MES_T'].max()]  # filtrado general
 
 gestiones_agg = ges_t.groupby('ID')['RESULTADO'].agg(lambda x: x.value_counts().idxmax()).reset_index()
 df = df.merge(gestiones_agg, on='ID', how='left')
+
+cols_to_drop = ['MES_T','MES','FECHA_CORTE','FECHA_PAGO','FECHA_CORTE_BASE', 'ESTADO CLIENTE_y', 'ULTIMO MOVIMIENTO_y', 'FECHA NACIMIENTO']
+df_model = df.drop(columns=cols_to_drop, errors='ignore')
+
+
+
+# Correlación con la Variable Target
+----------------------------------------------------
+
+# Para variables numéricas
+correlation = df_model.corr(numeric_only=True)
+sns.heatmap(correlation[['target']].sort_values('target', ascending=False), annot=True, cmap='coolwarm')
+plt.title("Correlación de variables con el target")
+plt.show()
+
+
+# Codificación de Variables Categóricas
+----------------------------------------------------
+
+# Identificar columnas de fecha para no codificarlas
+possible_date_cols = ['FECHA VINCULACION','FECHA CASTIGO', 'FECHA AUTORIZACION','FECHA CANCELACION','FECHA SUSPENSION']
+date_cols = [c for c in possible_date_cols if c in df_model.columns]
+
+# Parse a datetime
+df_model[date_cols] = df_model[date_cols].apply(pd.to_datetime, errors='coerce')
+
+# Convertir fechas a variables numéricas
+for c in date_cols:
+    df_model[c + "_INT"] = (df_model[c] - pd.Timestamp("1970-01-01")).dt.days
+
+# Eliminar fechas originales
+df_model = df_model.drop(columns=date_cols)
+
+df_model.set_index('ID', inplace=True)
+
+# Seleccionamos columnas categóricas
+cols_to_encode = df_model.select_dtypes(include=['object', 'category']).columns
+
+# Filtrar solo columnas con <= 50 categorías (para evitar explosión de memoria)
+cols_to_encode = [
+    c for c in cols_to_encode
+    if df_model[c].nunique() <= 50
+]
+
+# Columnas categóricas que exceden el umbral
+cols_high_card = [
+    c for c in df_model.select_dtypes(include=['object','category']).columns
+    if c not in cols_to_encode  # las que NO entraron al filtro
+]
+
+df_model = df_model.drop(columns=cols_high_card)
+df_model = df_model.drop_duplicates()
+
+# Hacer get_dummies
+df_encoded = pd.get_dummies(df_model, columns=cols_to_encode, drop_first=True)
+
+# Convertimos booleano a int
+bool_cols = df_encoded.select_dtypes(include='bool').columns
+df_encoded[bool_cols] = df_encoded[bool_cols].astype(int)
+
+# Reemplazar todos los NaN por -1
+df_encoded = df_encoded.fillna(-1)
+
+
+# Modelo
+----------------------------------------------------
+
+X = df_encoded.drop(columns=['target'])
+y = df_encoded['target']
+
+from sklearn.model_selection import train_test_split
+X_train, X_test, y_train, y_test = train_test_split(X, y, stratify=y, test_size=0.3, random_state=42)
+
+from xgboost import XGBClassifier
+
+model = XGBClassifier(
+    n_estimators=100,
+    learning_rate=0.05,
+    max_depth=5,
+    random_state=42,
+    eval_metric='auc'
+)
+
+model.fit(X_train, y_train)
+
+from sklearn.metrics import classification_report, roc_auc_score
+
+y_pred = model.predict(X_test)
+print(classification_report(y_test, y_pred))
+print("AUC:", roc_auc_score(y_test, model.predict_proba(X_test)[:,1]))
+
