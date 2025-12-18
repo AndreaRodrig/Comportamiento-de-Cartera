@@ -28,3 +28,9 @@ El modelo integra múltiples fuentes:
 - **Gestiones de cobranza**: tipo y resultado de las gestiones realizadas.  
 - **Buró de crédito**: información externa de historial crediticio.  
 
+---
+
+## Instrucciones para correr
+
+pip install -r requirements.txt
+python cobranza.py
